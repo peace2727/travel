@@ -90,7 +90,17 @@ const scoreText = ({ text, keywords, mustInclude }) => {
   for (const k of keywords) {
     const kk = k.toLowerCase()
     if (!kk) continue
-    if (t.includes(kk)) score += 2
+    // Count occurrences (cheap-ish) to prefer denser matches
+    let idx = 0
+    let c = 0
+    while (true) {
+      idx = t.indexOf(kk, idx)
+      if (idx === -1) break
+      c++
+      idx += kk.length || 1
+      if (c > 20) break
+    }
+    if (c > 0) score += 2 + c
   }
   for (const k of mustInclude) {
     const kk = k.toLowerCase()
@@ -99,6 +109,31 @@ const scoreText = ({ text, keywords, mustInclude }) => {
     else score -= 50
   }
   return score
+}
+
+const excerptAroundMatch = ({ text, keywords, maxLen = 6000 }) => {
+  const src = String(text || '')
+  const lower = src.toLowerCase()
+  let bestIdx = -1
+  let bestLen = 0
+  for (const k of keywords) {
+    const kk = String(k || '').toLowerCase().trim()
+    if (!kk) continue
+    const i = lower.indexOf(kk)
+    if (i !== -1) {
+      bestIdx = i
+      bestLen = kk.length
+      break
+    }
+  }
+  if (bestIdx === -1) return src.slice(0, maxLen)
+
+  const context = Math.floor((maxLen - bestLen) / 2)
+  const start = Math.max(0, bestIdx - context)
+  const end = Math.min(src.length, start + maxLen)
+  const prefix = start > 0 ? '…' : ''
+  const suffix = end < src.length ? '…' : ''
+  return `${prefix}${src.slice(start, end)}${suffix}`
 }
 
 const retrieveFromKnowledge = async ({ question, keywords, mustInclude }) => {
@@ -114,29 +149,37 @@ const retrieveFromKnowledge = async ({ question, keywords, mustInclude }) => {
     links.push({ name: m[1], relPath: m[2], mimeType: m[3] })
   }
 
-  // First pass: score by filename/path only (cheap)
-  const candidates = links
-    .map((it) => {
-      const score = scoreText({
+  // Pass 1: score by filename/path (cheap)
+  const pathScored = links
+    .map((it) => ({
+      ...it,
+      score: scoreText({
         text: `${it.name} ${it.relPath}`,
         keywords,
         mustInclude,
-      })
-      return { ...it, score }
-    })
+      }),
+    }))
     .sort((a, b) => b.score - a.score)
-    .slice(0, 40)
 
-  // Second pass: read top files and score by content too
+  // If path scoring is weak (common with "견적.xlsx.md"), fall back to content scan.
+  // The current indexes are not huge; content scanning is acceptable and much more reliable.
+  const shouldScanAll = pathScored.length <= 600 && (pathScored[0]?.score || 0) <= 0
+  const candidates = shouldScanAll ? pathScored : pathScored.slice(0, 80)
+
   const top = []
   for (const c of candidates) {
     const abs = path.join(process.cwd(), c.relPath)
     const content = await fs.readFile(abs, 'utf8').catch(() => '')
-    const score = c.score + scoreText({ text: content.slice(0, 20000), keywords, mustInclude })
+    const contentScore = scoreText({
+      text: content,
+      keywords,
+      mustInclude,
+    })
+    const score = c.score + contentScore
     top.push({
       ...c,
       score,
-      excerpt: content.slice(0, 6000),
+      excerpt: excerptAroundMatch({ text: content, keywords }),
     })
   }
 
