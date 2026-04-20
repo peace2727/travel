@@ -2,11 +2,16 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import process from 'node:process'
 
+import dotenv from 'dotenv'
 import { google } from 'googleapis'
 import { OAuth2Client } from 'google-auth-library'
 import * as XLSX from 'xlsx'
 
 const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.readonly'
+
+// Load local env files for CLI usage (do not commit secrets)
+dotenv.config({ path: path.resolve(process.cwd(), '.env.local') })
+dotenv.config({ path: path.resolve(process.cwd(), '.env') })
 
 const nowStamp = () => {
   const d = new Date()
@@ -59,7 +64,7 @@ const getOAuthClient = async () => {
 
   if (!clientId || !clientSecret) {
     throw new Error(
-      'Missing GOOGLE_CLIENT_ID or GOOGLE_CLIENT_SECRET in environment.',
+      'Missing GOOGLE_CLIENT_ID or GOOGLE_CLIENT_SECRET in environment (.env.local).',
     )
   }
 
