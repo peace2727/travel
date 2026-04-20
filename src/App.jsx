@@ -18,6 +18,8 @@ import {
 } from 'lucide-react'
 
 const GOOGLE_SCOPES = 'https://www.googleapis.com/auth/drive.readonly'
+const LS_VERIFIED_USER_KEY = 'drivechat_verified_user_v1'
+const SS_DRIVE_TOKEN_KEY = 'drivechat_drive_token_v1'
 
 const App = () => {
   const [messages, setMessages] = useState([])
@@ -31,6 +33,7 @@ const App = () => {
   const [authError, setAuthError] = useState(null)
   const [authStep, setAuthStep] = useState(null) // null | id | verify | drive
   const googleInitRef = useRef(false)
+  const pendingDriveTokenRequestRef = useRef(false)
 
   const [driveFolders, setDriveFolders] = useState([])
   const [selectedFolderId, setSelectedFolderId] = useState('root')
@@ -38,6 +41,52 @@ const App = () => {
   const [foldersError, setFoldersError] = useState(null)
 
   const canSend = useMemo(() => inputText.trim().length > 0, [inputText])
+
+  const saveVerifiedUser = (u) => {
+    try {
+      localStorage.setItem(LS_VERIFIED_USER_KEY, JSON.stringify(u))
+    } catch {
+      // ignore
+    }
+  }
+
+  const loadVerifiedUser = () => {
+    try {
+      const raw = localStorage.getItem(LS_VERIFIED_USER_KEY)
+      if (!raw) return null
+      const parsed = JSON.parse(raw)
+      if (!parsed?.email) return null
+      return parsed
+    } catch {
+      return null
+    }
+  }
+
+  const saveDriveToken = (tokenResponse) => {
+    try {
+      const expiresInSec = Number(tokenResponse?.expires_in || 0)
+      const expiresAt = Date.now() + Math.max(0, expiresInSec - 30) * 1000
+      sessionStorage.setItem(
+        SS_DRIVE_TOKEN_KEY,
+        JSON.stringify({ accessToken: tokenResponse?.access_token, expiresAt }),
+      )
+    } catch {
+      // ignore
+    }
+  }
+
+  const loadDriveToken = () => {
+    try {
+      const raw = sessionStorage.getItem(SS_DRIVE_TOKEN_KEY)
+      if (!raw) return null
+      const parsed = JSON.parse(raw)
+      if (!parsed?.accessToken || !parsed?.expiresAt) return null
+      if (Date.now() > parsed.expiresAt) return null
+      return parsed
+    } catch {
+      return null
+    }
+  }
 
   const ensureGoogleReady = async () => {
     if (window.google?.accounts?.oauth2 && window.google?.accounts?.id) return
@@ -106,7 +155,53 @@ const App = () => {
     return all
   }
 
-  const startLogin = async () => {
+  const requestDriveToken = async ({ interactive }) => {
+    const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID
+    if (!clientId) {
+      setAuthStatus('blocked')
+      setAuthError('missing_client_id')
+      return
+    }
+
+    if (pendingDriveTokenRequestRef.current) return
+    pendingDriveTokenRequestRef.current = true
+
+    try {
+      await ensureGoogleReady()
+
+      setAuthStatus('verifying')
+      setAuthStep('drive')
+
+      const tokenClient = window.google.accounts.oauth2.initTokenClient({
+        client_id: clientId,
+        scope: GOOGLE_SCOPES,
+        callback: (tokenResponse) => {
+          pendingDriveTokenRequestRef.current = false
+
+          if (!tokenResponse?.access_token) {
+            setAuthStatus('signedOut')
+            setAuthError('missing_access_token')
+            setAuthStep(null)
+            return
+          }
+
+          saveDriveToken(tokenResponse)
+          setDriveAccessToken(tokenResponse.access_token)
+          setAuthStep(null)
+          setAuthStatus('ready')
+        },
+      })
+
+      tokenClient.requestAccessToken({ prompt: interactive ? 'consent' : '' })
+    } catch {
+      pendingDriveTokenRequestRef.current = false
+      setAuthStatus('signedOut')
+      setAuthError('login_failed')
+      setAuthStep(null)
+    }
+  }
+
+  const startLogin = async ({ interactive } = { interactive: true }) => {
     setAuthError(null)
     setAuthStatus('verifying')
     setAuthStep('id')
@@ -131,30 +226,15 @@ const App = () => {
 
               setAuthStep('verify')
               const verified = await verifyIdTokenOnServer(idToken)
-              setUser({
+              const u = {
                 email: verified.email,
                 name: verified.name,
                 picture: verified.picture,
-              })
+              }
+              setUser(u)
+              saveVerifiedUser(u)
 
-              setAuthStep('drive')
-              const tokenClient = window.google.accounts.oauth2.initTokenClient({
-                client_id: clientId,
-                scope: GOOGLE_SCOPES,
-                prompt: 'consent',
-                callback: (tokenResponse) => {
-                  if (!tokenResponse?.access_token) {
-                    setAuthStatus('blocked')
-                    setAuthError('missing_access_token')
-                    return
-                  }
-                  setDriveAccessToken(tokenResponse.access_token)
-                  setAuthStep(null)
-                  setAuthStatus('ready')
-                },
-              })
-
-              tokenClient.requestAccessToken()
+              await requestDriveToken({ interactive })
             } catch (e) {
               setUser(null)
               setDriveAccessToken(null)
@@ -177,9 +257,20 @@ const App = () => {
   }
 
   useEffect(() => {
-    // first visit: require login
+    // restore from storage if possible, then try silent re-auth
+    const savedUser = loadVerifiedUser()
+    const savedToken = loadDriveToken()
+
+    if (savedUser) setUser(savedUser)
+    if (savedToken?.accessToken) setDriveAccessToken(savedToken.accessToken)
+
+    if (savedUser && savedToken?.accessToken) {
+      setAuthStatus('ready')
+      return
+    }
+
     setAuthStatus('signedOut')
-    startLogin()
+    startLogin({ interactive: false })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -460,7 +551,7 @@ const App = () => {
                 <div className="mt-3">
                   <button
                     type="button"
-                    onClick={startLogin}
+                    onClick={() => startLogin({ interactive: true })}
                     className="inline-flex items-center gap-2 px-3 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium"
                   >
                     <Cloud size={16} />
