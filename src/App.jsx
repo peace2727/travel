@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import {
   CheckCircle2,
   ChevronRight,
@@ -29,15 +29,18 @@ const App = () => {
   const [user, setUser] = useState(null) // { email, name, picture }
   const [driveAccessToken, setDriveAccessToken] = useState(null)
   const [authError, setAuthError] = useState(null)
+  const [authStep, setAuthStep] = useState(null) // null | id | verify | drive
+  const googleInitRef = useRef(false)
 
   const canSend = useMemo(() => inputText.trim().length > 0, [inputText])
 
   const ensureGoogleReady = async () => {
-    if (window.google?.accounts?.oauth2) return
+    if (window.google?.accounts?.oauth2 && window.google?.accounts?.id) return
     await new Promise((resolve, reject) => {
       const start = Date.now()
       const tick = () => {
-        if (window.google?.accounts?.oauth2) return resolve()
+        if (window.google?.accounts?.oauth2 && window.google?.accounts?.id)
+          return resolve()
         if (Date.now() - start > 8000) return reject(new Error('gis_not_loaded'))
         window.setTimeout(tick, 50)
       }
@@ -65,6 +68,7 @@ const App = () => {
   const startLogin = async () => {
     setAuthError(null)
     setAuthStatus('verifying')
+    setAuthStep('id')
 
     const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID
     if (!clientId) {
@@ -76,45 +80,58 @@ const App = () => {
     try {
       await ensureGoogleReady()
 
-      const tokenClient = window.google.accounts.oauth2.initTokenClient({
-        client_id: clientId,
-        scope: GOOGLE_SCOPES,
-        prompt: 'consent',
-        callback: async (tokenResponse) => {
-          try {
-            if (!tokenResponse?.access_token) {
-              setAuthStatus('signedOut')
-              setAuthError('missing_access_token')
-              return
+      if (!googleInitRef.current) {
+        window.google.accounts.id.initialize({
+          client_id: clientId,
+          callback: async (credentialResponse) => {
+            try {
+              const idToken = credentialResponse?.credential
+              if (!idToken) throw Object.assign(new Error('missing_id_token'), { code: 'missing_id_token' })
+
+              setAuthStep('verify')
+              const verified = await verifyIdTokenOnServer(idToken)
+              setUser({
+                email: verified.email,
+                name: verified.name,
+                picture: verified.picture,
+              })
+
+              setAuthStep('drive')
+              const tokenClient = window.google.accounts.oauth2.initTokenClient({
+                client_id: clientId,
+                scope: GOOGLE_SCOPES,
+                prompt: 'consent',
+                callback: (tokenResponse) => {
+                  if (!tokenResponse?.access_token) {
+                    setAuthStatus('blocked')
+                    setAuthError('missing_access_token')
+                    return
+                  }
+                  setDriveAccessToken(tokenResponse.access_token)
+                  setAuthStep(null)
+                  setAuthStatus('ready')
+                },
+              })
+
+              tokenClient.requestAccessToken()
+            } catch (e) {
+              setUser(null)
+              setDriveAccessToken(null)
+              setAuthStatus('blocked')
+              setAuthError(e.code || 'not_allowed')
+              setAuthStep(null)
             }
+          },
+        })
+        googleInitRef.current = true
+      }
 
-            if (!tokenResponse?.id_token) {
-              setAuthStatus('signedOut')
-              setAuthError('missing_id_token')
-              return
-            }
-
-            const verified = await verifyIdTokenOnServer(tokenResponse.id_token)
-            setUser({
-              email: verified.email,
-              name: verified.name,
-              picture: verified.picture,
-            })
-            setDriveAccessToken(tokenResponse.access_token)
-            setAuthStatus('ready')
-          } catch (e) {
-            setUser(null)
-            setDriveAccessToken(null)
-            setAuthStatus('blocked')
-            setAuthError(e.code || 'not_allowed')
-          }
-        },
-      })
-
-      tokenClient.requestAccessToken()
+      // Show Google Sign-In UX (One Tap / popup)
+      window.google.accounts.id.prompt()
     } catch (e) {
       setAuthStatus('signedOut')
       setAuthError('login_failed')
+      setAuthStep(null)
     }
   }
 
@@ -330,6 +347,17 @@ const App = () => {
                 <p className="text-sm mt-2 text-slate-600">
                   처음 접속 시 Google 로그인으로 Drive 접근 권한을 받아야 합니다.
                 </p>
+                {authStatus === 'verifying' && (
+                  <p className="text-sm mt-2 text-slate-600">
+                    진행 중: {authStep === 'id'
+                      ? 'Google 로그인'
+                      : authStep === 'verify'
+                        ? '계정 검증'
+                        : authStep === 'drive'
+                          ? 'Drive 권한 요청'
+                          : '처리 중'}
+                  </p>
+                )}
                 {authStatus === 'blocked' && (
                   <p className="text-sm mt-2 text-red-600">
                     접근이 차단되었습니다. 허용된 계정인지 확인하세요.
