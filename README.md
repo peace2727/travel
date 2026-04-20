@@ -32,6 +32,8 @@ vercel login
 - `ALLOWED_EMAILS`: 허용 이메일 목록(콤마 구분). 예: `me@company.com,admin@company.com`
 - `OPENAI_API_KEY`: (서버) OpenAI API Key
 - `OPENAI_MODEL`: (선택) 모델명. 기본값: `gpt-4o-mini`
+- `KB_DEBUG`: (선택) `1`로 설정하면 `/api/chat` 응답에 검색 히트 디버그 포함
+- `KNOWLEDGE_BASE_DIR`: (선택) 지식베이스 경로. 기본값: `knowledge/drive`
 
 ## 로컬: Google Drive → 지식(MD) 생성
 
