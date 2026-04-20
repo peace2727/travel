@@ -60,7 +60,7 @@ const getOAuthClient = async () => {
   const clientId = process.env.GOOGLE_CLIENT_ID
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET
   const redirectUri =
-    process.env.GOOGLE_REDIRECT_URI || 'http://localhost:5173/oauth2callback'
+    process.env.GOOGLE_REDIRECT_URI || 'http://localhost:8787/oauth2callback'
 
   if (!clientId || !clientSecret) {
     throw new Error(

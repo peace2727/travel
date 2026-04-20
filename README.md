@@ -44,7 +44,11 @@ Drive 폴더를 재귀적으로 순회해서 파일 내용을 읽고(`xlsx`/Goog
 
 - `GOOGLE_CLIENT_ID`
 - `GOOGLE_CLIENT_SECRET`
-- `GOOGLE_REDIRECT_URI` (선택, 기본값은 스크립트에 포함)
+- `GOOGLE_REDIRECT_URI` (선택, 기본값: `http://localhost:8787/oauth2callback`)
+
+그리고 Google Cloud Console의 OAuth Client 설정에서 **Authorized redirect URIs**에 아래를 추가해야 합니다.
+
+- `http://localhost:8787/oauth2callback`
 
 ### 2) 실행
 
