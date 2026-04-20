@@ -1,6 +1,8 @@
 import fs from 'node:fs/promises'
+import http from 'node:http'
 import path from 'node:path'
 import process from 'node:process'
+import { URL } from 'node:url'
 
 import dotenv from 'dotenv'
 import { google } from 'googleapis'
@@ -71,6 +73,67 @@ const getOAuthClient = async () => {
   return new OAuth2Client({ clientId, clientSecret, redirectUri })
 }
 
+const waitForOAuthCodeViaLocalServer = async (redirectUri) => {
+  const u = new URL(redirectUri)
+  const port = Number(u.port || 80)
+  const hostname = u.hostname || 'localhost'
+  const pathname = u.pathname || '/'
+
+  if (hostname !== 'localhost' && hostname !== '127.0.0.1') {
+    throw new Error('redirect_uri_host_must_be_localhost')
+  }
+
+  return await new Promise((resolve, reject) => {
+    const server = http.createServer((req, res) => {
+      try {
+        const reqUrl = new URL(req.url || '/', redirectUri)
+        if (reqUrl.pathname !== pathname) {
+          res.statusCode = 404
+          res.end('Not found')
+          return
+        }
+
+        const code = reqUrl.searchParams.get('code')
+        const error = reqUrl.searchParams.get('error')
+
+        res.statusCode = 200
+        res.setHeader('Content-Type', 'text/html; charset=utf-8')
+
+        if (error) {
+          res.end(
+            `<h2>OAuth error</h2><pre>${String(error)}</pre><p>You can close this tab.</p>`,
+          )
+          server.close(() => reject(new Error(`oauth_error:${error}`)))
+          return
+        }
+
+        if (!code) {
+          res.end(
+            `<h2>Missing code</h2><p>No "code" parameter found. You can close this tab.</p>`,
+          )
+          server.close(() => reject(new Error('missing_code')))
+          return
+        }
+
+        res.end(
+          `<h2>Connected</h2><p>인증이 완료되었습니다. 이 창을 닫고 터미널로 돌아가세요.</p>`,
+        )
+        server.close(() => resolve(code))
+      } catch (e) {
+        res.statusCode = 500
+        res.end('Server error')
+        server.close(() => reject(e))
+      }
+    })
+
+    server.on('error', (e) => reject(e))
+    server.listen(port, hostname, () => {
+      // eslint-disable-next-line no-console
+      console.log(`\nWaiting for OAuth redirect at ${redirectUri}\n`)
+    })
+  })
+}
+
 const getAuthedGoogle = async ({ tokenPath }) => {
   const oauth2 = await getOAuthClient()
 
@@ -92,12 +155,18 @@ const getAuthedGoogle = async ({ tokenPath }) => {
   // eslint-disable-next-line no-console
   console.log('')
 
-  const code = await new Promise((resolve) => {
-    process.stdout.write('Code: ')
-    process.stdin.resume()
-    process.stdin.setEncoding('utf8')
-    process.stdin.once('data', (d) => resolve(String(d).trim()))
-  })
+  let code
+  try {
+    code = await waitForOAuthCodeViaLocalServer(oauth2.redirectUri)
+  } catch {
+    // fallback: allow manual paste
+    code = await new Promise((resolve) => {
+      process.stdout.write('Code: ')
+      process.stdin.resume()
+      process.stdin.setEncoding('utf8')
+      process.stdin.once('data', (d) => resolve(String(d).trim()))
+    })
+  }
 
   const { tokens } = await oauth2.getToken(code)
   oauth2.setCredentials(tokens)
