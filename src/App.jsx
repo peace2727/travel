@@ -32,6 +32,11 @@ const App = () => {
   const [authStep, setAuthStep] = useState(null) // null | id | verify | drive
   const googleInitRef = useRef(false)
 
+  const [driveFolders, setDriveFolders] = useState([])
+  const [selectedFolderId, setSelectedFolderId] = useState('root')
+  const [foldersStatus, setFoldersStatus] = useState('idle') // idle | loading | ready | error
+  const [foldersError, setFoldersError] = useState(null)
+
   const canSend = useMemo(() => inputText.trim().length > 0, [inputText])
 
   const ensureGoogleReady = async () => {
@@ -63,6 +68,42 @@ const App = () => {
       throw err
     }
     return data
+  }
+
+  const fetchDriveFolders = async (accessToken) => {
+    const all = []
+    let pageToken = undefined
+
+    const baseParams = new URLSearchParams()
+    baseParams.set('q', "mimeType='application/vnd.google-apps.folder' and 'root' in parents and trashed=false")
+    baseParams.set('orderBy', 'name')
+    baseParams.set('pageSize', '100')
+    baseParams.set('fields', 'nextPageToken,files(id,name)')
+    baseParams.set('supportsAllDrives', 'true')
+    baseParams.set('includeItemsFromAllDrives', 'true')
+
+    do {
+      const params = new URLSearchParams(baseParams)
+      if (pageToken) params.set('pageToken', pageToken)
+
+      const res = await fetch(
+        `https://www.googleapis.com/drive/v3/files?${params.toString()}`,
+        { headers: { Authorization: `Bearer ${accessToken}` } },
+      )
+
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        const err = new Error(data?.error?.message || 'drive_list_failed')
+        err.code = data?.error?.status || data?.error?.code || 'drive_error'
+        throw err
+      }
+
+      const files = Array.isArray(data?.files) ? data.files : []
+      all.push(...files)
+      pageToken = data?.nextPageToken
+    } while (pageToken)
+
+    return all
   }
 
   const startLogin = async () => {
@@ -157,6 +198,31 @@ const App = () => {
     ])
   }, [authStatus, user])
 
+  useEffect(() => {
+    if (authStatus !== 'ready' || !driveAccessToken) return
+
+    let cancelled = false
+    setFoldersStatus('loading')
+    setFoldersError(null)
+
+    fetchDriveFolders(driveAccessToken)
+      .then((folders) => {
+        if (cancelled) return
+        setDriveFolders(folders)
+        setFoldersStatus('ready')
+      })
+      .catch((e) => {
+        if (cancelled) return
+        setDriveFolders([])
+        setFoldersStatus('error')
+        setFoldersError(e.code || e.message || 'drive_error')
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [authStatus, driveAccessToken])
+
   const handleSendMessage = (e) => {
     e.preventDefault()
     if (!canSend) return
@@ -249,13 +315,40 @@ const App = () => {
                 연결된 폴더
               </p>
             )}
-            <button
-              className="w-full flex items-center gap-3 px-3 py-2 text-slate-600 hover:bg-slate-50 rounded-lg text-sm"
-              type="button"
-            >
-              <Folder size={18} className="text-amber-500" />
-              {isSidebarOpen && <span className="truncate">2024 프로젝트</span>}
-            </button>
+            {foldersStatus === 'loading' && (
+              <div className="px-3 py-2 text-xs text-slate-500">
+                폴더 불러오는 중…
+              </div>
+            )}
+            {foldersStatus === 'error' && (
+              <div className="px-3 py-2 text-xs text-red-600">
+                폴더를 불러오지 못했습니다. {foldersError ? `(code: ${foldersError})` : ''}
+              </div>
+            )}
+            {foldersStatus === 'ready' && driveFolders.length === 0 && (
+              <div className="px-3 py-2 text-xs text-slate-500">
+                표시할 폴더가 없습니다.
+              </div>
+            )}
+            {foldersStatus === 'ready' &&
+              driveFolders.map((folder) => (
+                <button
+                  key={folder.id}
+                  className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm ${
+                    selectedFolderId === folder.id
+                      ? 'bg-slate-100 text-blue-600 font-medium'
+                      : 'text-slate-600 hover:bg-slate-50'
+                  }`}
+                  type="button"
+                  onClick={() => setSelectedFolderId(folder.id)}
+                  title={folder.name}
+                >
+                  <Folder size={18} className="text-amber-500" />
+                  {isSidebarOpen && (
+                    <span className="truncate">{folder.name}</span>
+                  )}
+                </button>
+              ))}
           </div>
         </nav>
 
