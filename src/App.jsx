@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import {
   CheckCircle2,
   ChevronRight,
@@ -17,25 +17,128 @@ import {
   X,
 } from 'lucide-react'
 
+const GOOGLE_SCOPES = 'https://www.googleapis.com/auth/drive.readonly'
+
 const App = () => {
-  const [messages, setMessages] = useState([
-    {
-      id: 1,
-      role: 'ai',
-      content:
-        '안녕하세요! 구글 드라이브의 자료를 바탕으로 답변해드리는 어시스턴트입니다. 어떤 문서를 찾아드릴까요?',
-      timestamp: '오전 10:00',
-    },
-  ])
+  const [messages, setMessages] = useState([])
   const [inputText, setInputText] = useState('')
   const [isSidebarOpen, setSidebarOpen] = useState(true)
-  const [isDriveConnected] = useState(true)
-  const [selectedDocs] = useState([
-    { name: '2024 마케팅 전략.pdf', type: 'pdf' },
-    { name: 'Q3 프로젝트 일정표.gsheet', type: 'sheet' },
-  ])
+  const [selectedDocs, setSelectedDocs] = useState([])
+
+  const [authStatus, setAuthStatus] = useState('loading') // loading | signedOut | verifying | blocked | ready
+  const [user, setUser] = useState(null) // { email, name, picture }
+  const [driveAccessToken, setDriveAccessToken] = useState(null)
+  const [authError, setAuthError] = useState(null)
 
   const canSend = useMemo(() => inputText.trim().length > 0, [inputText])
+
+  const ensureGoogleReady = async () => {
+    if (window.google?.accounts?.oauth2) return
+    await new Promise((resolve, reject) => {
+      const start = Date.now()
+      const tick = () => {
+        if (window.google?.accounts?.oauth2) return resolve()
+        if (Date.now() - start > 8000) return reject(new Error('gis_not_loaded'))
+        window.setTimeout(tick, 50)
+      }
+      tick()
+    })
+  }
+
+  const verifyIdTokenOnServer = async (idToken) => {
+    const res = await fetch('/api/auth/verify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ idToken }),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok || !data?.ok) {
+      const err = new Error(data?.error || 'verify_failed')
+      err.code = data?.error
+      err.httpStatus = res.status
+      err.email = data?.email
+      throw err
+    }
+    return data
+  }
+
+  const startLogin = async () => {
+    setAuthError(null)
+    setAuthStatus('verifying')
+
+    const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID
+    if (!clientId) {
+      setAuthStatus('blocked')
+      setAuthError('missing_client_id')
+      return
+    }
+
+    try {
+      await ensureGoogleReady()
+
+      const tokenClient = window.google.accounts.oauth2.initTokenClient({
+        client_id: clientId,
+        scope: GOOGLE_SCOPES,
+        prompt: 'consent',
+        callback: async (tokenResponse) => {
+          try {
+            if (!tokenResponse?.access_token) {
+              setAuthStatus('signedOut')
+              setAuthError('missing_access_token')
+              return
+            }
+
+            if (!tokenResponse?.id_token) {
+              setAuthStatus('signedOut')
+              setAuthError('missing_id_token')
+              return
+            }
+
+            const verified = await verifyIdTokenOnServer(tokenResponse.id_token)
+            setUser({
+              email: verified.email,
+              name: verified.name,
+              picture: verified.picture,
+            })
+            setDriveAccessToken(tokenResponse.access_token)
+            setAuthStatus('ready')
+          } catch (e) {
+            setUser(null)
+            setDriveAccessToken(null)
+            setAuthStatus('blocked')
+            setAuthError(e.code || 'not_allowed')
+          }
+        },
+      })
+
+      tokenClient.requestAccessToken()
+    } catch (e) {
+      setAuthStatus('signedOut')
+      setAuthError('login_failed')
+    }
+  }
+
+  useEffect(() => {
+    // first visit: require login
+    setAuthStatus('signedOut')
+    startLogin()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  useEffect(() => {
+    if (authStatus !== 'ready' || !user) return
+    setMessages([
+      {
+        id: 1,
+        role: 'ai',
+        content: `안녕하세요, ${user.name || user.email}님. 연결된 Google Drive에서 문서를 찾아드릴까요?`,
+        timestamp: new Date().toLocaleTimeString([], {
+          hour: '2-digit',
+          minute: '2-digit',
+        }),
+      },
+    ])
+  }, [authStatus, user])
 
   const handleSendMessage = (e) => {
     e.preventDefault()
@@ -55,19 +158,6 @@ const App = () => {
     setMessages((prev) => [...prev, newUserMessage])
     setInputText('')
 
-    window.setTimeout(() => {
-      const aiResponse = {
-        id: Date.now() + 1,
-        role: 'ai',
-        content: `찾으신 드라이브 문서에 따르면, '${prompt}'에 대한 내용은 2024 마케팅 전략 문서의 12페이지에 설명되어 있습니다. 해당 부분은 예산 효율화에 집중하고 있네요.`,
-        source: '2024 마케팅 전략.pdf',
-        timestamp: new Date().toLocaleTimeString([], {
-          hour: '2-digit',
-          minute: '2-digit',
-        }),
-      }
-      setMessages((prev) => [...prev, aiResponse])
-    }, 1000)
   }
 
   return (
@@ -153,19 +243,22 @@ const App = () => {
         </nav>
 
         <div className="p-4 border-t border-slate-100 space-y-2">
-          {isDriveConnected ? (
+          {authStatus === 'ready' ? (
             <div
               className={`flex items-center gap-3 px-3 py-2 bg-emerald-50 text-emerald-700 rounded-lg text-xs ${
                 !isSidebarOpen && 'justify-center px-0'
               }`}
             >
               <CheckCircle2 size={16} />
-              {isSidebarOpen && <span>구글 드라이브 연결됨</span>}
+              {isSidebarOpen && (
+                <span className="truncate">연결됨 · {user?.email}</span>
+              )}
             </div>
           ) : (
             <button
               className="w-full flex items-center gap-3 px-3 py-2 bg-blue-50 text-blue-600 rounded-lg text-xs font-medium"
               type="button"
+              onClick={startLogin}
             >
               <Cloud size={16} />
               {isSidebarOpen && <span>드라이브 연결하기</span>}
@@ -201,6 +294,11 @@ const App = () => {
                   <X
                     size={12}
                     className="cursor-pointer hover:text-red-500"
+                    onClick={() =>
+                      setSelectedDocs((prev) =>
+                        prev.filter((d) => d.name !== doc.name),
+                      )
+                    }
                   />
                 </div>
               ))}
@@ -222,6 +320,35 @@ const App = () => {
 
         {/* Chat Area */}
         <div className="flex-1 overflow-y-auto p-6 space-y-6">
+          {authStatus !== 'ready' && (
+            <div className="max-w-3xl mx-auto">
+              <div className="p-4 rounded-2xl border border-slate-200 bg-slate-50 text-slate-700">
+                <div className="flex items-center gap-2 font-semibold">
+                  <Cloud size={18} />
+                  Google Drive 연결 필요
+                </div>
+                <p className="text-sm mt-2 text-slate-600">
+                  처음 접속 시 Google 로그인으로 Drive 접근 권한을 받아야 합니다.
+                </p>
+                {authStatus === 'blocked' && (
+                  <p className="text-sm mt-2 text-red-600">
+                    접근이 차단되었습니다. 허용된 계정인지 확인하세요.
+                    {authError ? ` (code: ${authError})` : ''}
+                  </p>
+                )}
+                <div className="mt-3">
+                  <button
+                    type="button"
+                    onClick={startLogin}
+                    className="inline-flex items-center gap-2 px-3 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium"
+                  >
+                    <Cloud size={16} />
+                    Google로 로그인
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
           {messages.map((msg) => (
             <div
               key={msg.id}
@@ -276,10 +403,11 @@ const App = () => {
               onChange={(e) => setInputText(e.target.value)}
               placeholder="연결된 드라이브 문서에 대해 무엇이든 물어보세요..."
               className="w-full pl-12 pr-14 py-4 bg-white border-2 border-slate-200 rounded-2xl focus:outline-none focus:border-blue-500 transition-all shadow-lg shadow-slate-100/50 text-sm"
+              disabled={authStatus !== 'ready'}
             />
             <button
               type="submit"
-              disabled={!canSend}
+              disabled={!canSend || authStatus !== 'ready'}
               className="absolute right-3 inset-y-3 px-3 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white rounded-xl transition-all flex items-center justify-center shadow-sm"
               aria-label="Send message"
             >
@@ -305,46 +433,22 @@ const App = () => {
           </button>
         </div>
         <div className="p-4 space-y-4 overflow-y-auto">
-          <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm hover:border-blue-300 transition-all cursor-pointer group">
+          <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
             <div className="flex items-start gap-3">
-              <div className="p-2 bg-blue-50 rounded-lg text-blue-600 group-hover:bg-blue-600 group-hover:text-white transition-colors">
+              <div className="p-2 bg-slate-50 rounded-lg text-slate-600">
                 <FileText size={20} />
               </div>
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-semibold truncate text-slate-800">
-                  2024 마케팅 전략.pdf
+                  아직 참조된 리소스가 없어요
                 </p>
                 <p className="text-[11px] text-slate-500 mt-1">
-                  최종 수정: 2024.03.15
+                  Drive에서 파일을 선택하면 여기에 표시됩니다.
                 </p>
               </div>
             </div>
-            <div className="mt-3 text-[12px] text-slate-600 line-clamp-3 leading-relaxed bg-slate-50 p-2 rounded-lg">
-              "올해 2분기 예산안은 전년 대비 15% 증액되었으며, 특히 디지털 광고 부문에 집중적인..."
-            </div>
-            <div className="mt-2 flex items-center justify-between text-[11px]">
-              <span className="text-blue-600 font-medium">드라이브에서 열기</span>
-              <ChevronRight size={14} className="text-slate-400" />
-            </div>
-          </div>
-
-          <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm hover:border-blue-300 transition-all cursor-pointer group">
-            <div className="flex items-start gap-3">
-              <div className="p-2 bg-green-50 rounded-lg text-green-600">
-                <FileText size={20} />
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-semibold truncate text-slate-800">
-                  Q3 프로젝트 일정표.gsheet
-                </p>
-                <p className="text-[11px] text-slate-500 mt-1">
-                  최종 수정: 2024.04.01
-                </p>
-              </div>
-            </div>
-            <div className="mt-2 flex items-center justify-between text-[11px]">
-              <span className="text-blue-600 font-medium">드라이브에서 열기</span>
-              <ChevronRight size={14} className="text-slate-400" />
+            <div className="mt-3 text-[12px] text-slate-600 leading-relaxed bg-slate-50 p-2 rounded-lg">
+              로그인 후 검색/선택한 문서가 이 패널에 모입니다.
             </div>
           </div>
         </div>
