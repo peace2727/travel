@@ -68,7 +68,11 @@ const extractKeywords = async ({ client, model, question }) => {
 
   const content = r?.choices?.[0]?.message?.content || ''
   const parsed = safeJsonParse(content) || { keywords: [], must_include: [] }
-  const keywords = (parsed.keywords || [])
+  const keywords = [
+    // Always include the raw question too (cheap fallback)
+    question,
+    ...(parsed.keywords || []),
+  ]
     .map((s) => String(s || '').trim())
     .filter(Boolean)
     .slice(0, 10)
@@ -175,8 +179,10 @@ export default async function handler(req, res) {
     }
 
     const system = [
-      'You are a helpful assistant for a Google Drive Q&A app.',
-      'If you do not have the document contents, ask the user which file/folder to use and what to search for.',
+      'You are a helpful assistant for a travel knowledge base.',
+      'You MUST answer based on the provided "Knowledge hits" excerpts (which come from local Markdown files).',
+      'Do NOT ask the user to pick Google Drive folders or files.',
+      'If Knowledge hits is "none", say that the information was not found in the current knowledge base and suggest running the monthly indexing job to refresh knowledge.',
       userEmail ? `User email: ${userEmail}` : null,
       selectedFolderId ? `Selected folder id: ${selectedFolderId}` : null,
       Array.isArray(selectedDocs) && selectedDocs.length
