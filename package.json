@@ -7,14 +7,17 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "kb:index": "node ./scripts/drive-kb-index.mjs"
   },
   "dependencies": {
     "google-auth-library": "^10.4.1",
+    "googleapis": "^154.0.0",
     "lucide-react": "^1.8.0",
     "openai": "^4.63.0",
     "react": "^19.2.5",
-    "react-dom": "^19.2.5"
+    "react-dom": "^19.2.5",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.4",

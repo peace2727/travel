@@ -33,6 +33,43 @@ vercel login
 - `OPENAI_API_KEY`: (서버) OpenAI API Key
 - `OPENAI_MODEL`: (선택) 모델명. 기본값: `gpt-4o-mini`
 
+## 로컬: Google Drive → 지식(MD) 생성
+
+Drive 폴더를 재귀적으로 순회해서 파일 내용을 읽고(`xlsx`/Google Sheets는 **시트(tab)별**로),
+검색/질문용 Markdown 지식베이스를 생성합니다.
+
+### 1) 준비 (로컬 환경변수)
+
+로컬에서만 사용하세요(절대 커밋 금지).
+
+- `GOOGLE_CLIENT_ID`
+- `GOOGLE_CLIENT_SECRET`
+- `GOOGLE_REDIRECT_URI` (선택, 기본값은 스크립트에 포함)
+
+### 2) 실행
+
+내 드라이브 전체(root)에서 생성:
+
+```powershell
+npm run kb:index -- --folderId root
+```
+
+특정 폴더에서만 생성:
+
+```powershell
+npm run kb:index -- --folderId <FOLDER_ID>
+```
+
+출력 위치:
+- `knowledge/drive/<timestamp>/index.md` (전체 인덱스)
+- 그 아래에 파일별 `.md`
+
+### 폴더 ID 얻는 법
+
+Drive에서 폴더 우클릭 → 링크 복사 → URL이 이런 형태입니다.
+
+- `https://drive.google.com/drive/folders/<FOLDER_ID>`
+
 ### 2) 프로젝트 연결(link)
 
 ```powershell
