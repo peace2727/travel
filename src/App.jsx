@@ -39,6 +39,8 @@ const App = () => {
   const [selectedFolderId, setSelectedFolderId] = useState('root')
   const [foldersStatus, setFoldersStatus] = useState('idle') // idle | loading | ready | error
   const [foldersError, setFoldersError] = useState(null)
+  const [chatStatus, setChatStatus] = useState('idle') // idle | sending
+  const [chatError, setChatError] = useState(null)
 
   const canSend = useMemo(() => inputText.trim().length > 0, [inputText])
 
@@ -332,6 +334,63 @@ const App = () => {
     setMessages((prev) => [...prev, newUserMessage])
     setInputText('')
 
+    setChatError(null)
+    setChatStatus('sending')
+
+    const thinkingId = `${newUserMessage.id}-thinking`
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: thinkingId,
+        role: 'ai',
+        content: '생각 중…',
+        timestamp: new Date().toLocaleTimeString([], {
+          hour: '2-digit',
+          minute: '2-digit',
+        }),
+      },
+    ])
+
+    fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        messages: [...messages, newUserMessage].map((m) => ({
+          role: m.role,
+          content: m.content,
+        })),
+        userEmail: user?.email || null,
+        selectedFolderId,
+        selectedDocs,
+      }),
+    })
+      .then(async (res) => {
+        const data = await res.json().catch(() => ({}))
+        if (!res.ok || !data?.ok) {
+          const err = new Error(data?.error || 'chat_failed')
+          err.code = data?.error
+          throw err
+        }
+        return data.text || ''
+      })
+      .then((text) => {
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === thinkingId ? { ...m, content: text || '(빈 응답)' } : m,
+          ),
+        )
+      })
+      .catch((err) => {
+        setChatError(err.code || 'chat_failed')
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === thinkingId
+              ? { ...m, content: '오류가 발생했어요. 잠시 후 다시 시도해주세요.' }
+              : m,
+          ),
+        )
+      })
+      .finally(() => setChatStatus('idle'))
   }
 
   return (
@@ -619,7 +678,7 @@ const App = () => {
             />
             <button
               type="submit"
-              disabled={!canSend || authStatus !== 'ready'}
+              disabled={!canSend || authStatus !== 'ready' || chatStatus === 'sending'}
               className="absolute right-3 inset-y-3 px-3 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white rounded-xl transition-all flex items-center justify-center shadow-sm"
               aria-label="Send message"
             >
@@ -629,6 +688,11 @@ const App = () => {
           <p className="text-center text-[11px] text-slate-400 mt-3">
             AI는 드라이브의 내용을 바탕으로 정보를 생성하며, 간혹 오류가 발생할 수 있습니다.
           </p>
+          {chatError && (
+            <p className="text-center text-[11px] text-red-500 mt-2">
+              채팅 오류: {chatError}
+            </p>
+          )}
         </div>
       </main>
 

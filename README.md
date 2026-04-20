@@ -30,6 +30,8 @@ vercel login
 - `VITE_GOOGLE_CLIENT_ID`: (프론트) Google OAuth Client ID
 - `GOOGLE_CLIENT_ID`: (서버) 위와 동일한 Client ID (토큰 audience 검증용)
 - `ALLOWED_EMAILS`: 허용 이메일 목록(콤마 구분). 예: `me@company.com,admin@company.com`
+- `OPENAI_API_KEY`: (서버) OpenAI API Key
+- `OPENAI_MODEL`: (선택) 모델명. 기본값: `gpt-4o-mini`
 
 ### 2) 프로젝트 연결(link)
 
